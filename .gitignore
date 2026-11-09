@@ -3,3 +3,4 @@ __pycache__/
 stems/
 separated/
 .DS_Store
+build/
