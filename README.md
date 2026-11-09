@@ -1,31 +1,28 @@
 # StemSeparator
 
-Split a song into stems (vocals, drums, bass, other) from the command line. A thin wrapper around [Demucs](https://github.com/facebookresearch/demucs) that takes files or whole folders and handles the flags for you.
+A small Mac app that splits a song into vocals and instrumentals (and individual stems) by dragging audio files onto a window. It runs [Demucs](https://github.com/facebookresearch/demucs) under the hood and queues multiple files.
 
-## Setup
+- Drop audio files onto the window; they process one after another.
+- Save the vocals, or save the instrumentals, with one click.
+- Apple Silicon Macs only (arm64).
 
-```sh
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
+## Install
 
-## Usage
+1. Install Demucs, which does the actual separation:
+   ```sh
+   pip3 install demucs
+   ```
+   You also need `ffmpeg` for MP3 input: `brew install ffmpeg`.
+2. Download `StemSeparator.zip` from the [latest release](../../releases/latest), unzip it, and drag **StemSeparator.app** into `/Applications`.
+3. The app isn't notarized, so macOS will refuse to open it the first time. Either right-click the app and choose **Open**, or run:
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/StemSeparator.app
+   ```
 
-```sh
-./stemsep.py song.mp3                      # vocals, drums, bass, other
-./stemsep.py ~/Music/album/                # every audio file in a folder
-./stemsep.py song.mp3 --two-stems vocals   # vocals + instrumental only
-./stemsep.py song.mp3 -m htdemucs_6s       # also guitar and piano
-./stemsep.py song.mp3 --mp3 -o ~/Desktop/stems
-```
+The first separation downloads the Demucs model weights (a few hundred MB), so it needs an internet connection and takes longer once.
 
-Output lands in `stems/<model>/<song name>/`. On Apple Silicon, `--device mps` can speed things up.
+The app looks for `demucs` in `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, and the python.org Python 3.11, 3.12 and 3.13 `bin` folders. If it says "demucs not found", install it with one of those Python setups.
 
-| Model | Notes |
-|---|---|
-| `htdemucs` | Default, good balance of speed and quality |
-| `htdemucs_ft` | Fine-tuned, cleaner but about 4x slower |
-| `htdemucs_6s` | Six stems, adds guitar and piano (piano is weaker) |
-| `mdx_extra` | Alternative architecture |
+## Notes
 
-Model weights download automatically on first run.
+This repo currently hosts the built app only; the Swift source isn't included.
