@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+stems/
+separated/
+.DS_Store
