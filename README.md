@@ -3,7 +3,7 @@
 A small Mac app that splits a song into vocals and instrumentals (or individual stems) by dragging audio files onto a window. It runs [Demucs](https://github.com/facebookresearch/demucs) under the hood and queues multiple files.
 
 - Drop audio files onto the window, or click it to choose files. They process one after another.
-- Save the vocals, the instrumental, or every stem with one click.
+- Save the vocals, the instrumental, the woodwinds, or every stem with one click.
 - First launch walks you through downloading the models you want.
 - Apple Silicon Macs only (arm64), macOS 14 or later.
 
@@ -14,6 +14,11 @@ A small Mac app that splits a song into vocals and instrumentals (or individual 
    pip3 install demucs
    ```
    You also need `ffmpeg` for MP3 input: `brew install ffmpeg`.
+
+   For the optional **Woodwinds** model (saxophone, flute, clarinet and so on), also install `audio-separator`. It pulls in PyTorch, so expect about 1 GB:
+   ```sh
+   pip3 install "audio-separator[cpu]"
+   ```
 2. Download `StemSeparator.zip` from the [latest release](../../releases/latest), unzip it, and drag **StemSeparator.app** into `/Applications`.
 3. The app isn't notarized, so macOS will refuse to open it the first time. Either right-click the app and choose **Open**, or run:
    ```sh
@@ -28,8 +33,11 @@ A small Mac app that splits a song into vocals and instrumentals (or individual 
 | Standard (`htdemucs`) | 84 MB | Vocals, drums, bass, other. Fast; the default |
 | High quality (`htdemucs_ft`) | 337 MB | Same stems, cleaner, about 4x slower |
 | Six stems (`htdemucs_6s`) | 55 MB | Adds guitar and piano |
+| Woodwinds (`17_HP-Wind_Inst-UVR`) | 224 MB | Pulls woodwinds out of a track and leaves the rest. Runs through `audio-separator` |
 
-Models come from Meta's public Demucs release (`dl.fbaipublicfiles.com`), are checked against their published SHA-256 prefix, and are saved to `~/.cache/torch/hub/checkpoints`, where Demucs itself looks for them. If you already use Demucs, any models you have are detected automatically.
+The Demucs models come from Meta's public release (`dl.fbaipublicfiles.com`), are checked against their published SHA-256 prefix, and are saved to `~/.cache/torch/hub/checkpoints`, where Demucs itself looks for them. If you already use Demucs, any models you have are detected automatically.
+
+The Woodwinds model is a community-trained model from the [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui) collection, downloaded from the `TRvlvr/model_repo` GitHub release (with a mirror as fallback), checked against a pinned SHA-256, and saved to `~/Library/Application Support/StemSeparator/models`. It runs in about the time the song lasts, and works best when a sax or flute is clearly audible; in a dense big-band mix, other horns can bleed into the woodwind stem.
 
 ## Build from source
 

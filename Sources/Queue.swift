@@ -3,7 +3,7 @@ import AppKit
 
 struct StemOutput: Identifiable {
     let id = UUID()
-    let stem: String        // "vocals", "drums", "no_vocals", ...
+    let stem: String        // "vocals", "drums", "no_vocals", "Woodwinds", ...
     let url: URL
     var label: String {
         switch stem {
@@ -49,14 +49,14 @@ final class QueueManager: ObservableObject {
         try? FileManager.default.removeItem(at: Self.cacheRoot)   // stems from earlier sessions
     }
 
-    func add(_ urls: [URL], model: ModelConfig, twoStems: Bool, demucs: String?) {
+    func add(_ urls: [URL], model: ModelConfig, twoStems: Bool, tool: String?) {
         for u in urls where Self.audioExts.contains(u.pathExtension.lowercased()) {
             items.append(QueueItem(url: u, model: model, twoStems: twoStems))
         }
         guard worker == nil else { return }
         worker = Task { [weak self] in
             while let self, let next = self.items.first(where: { $0.status == .waiting }) {
-                await self.run(next, demucs: demucs)
+                await self.run(next, tool: tool)
             }
             self?.worker = nil
         }
@@ -69,25 +69,33 @@ final class QueueManager: ObservableObject {
         try? FileManager.default.removeItem(at: Self.cacheRoot.appendingPathComponent(item.id.uuidString))
     }
 
-    private func run(_ item: QueueItem, demucs: String?) async {
-        guard let demucs else {
-            item.status = .failed("demucs not found.\nInstall with: pip3 install demucs")
+    private func run(_ item: QueueItem, tool: String?) async {
+        let engine = item.model.engine
+        guard let tool else {
+            item.status = .failed("\(engine.toolName) not found.\nInstall with: \(engine.installCommand)")
             return
         }
         item.status = .running
         let out = Self.cacheRoot.appendingPathComponent(item.id.uuidString)
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
-        var args = ["-n", item.model.id]
-        if item.twoStems { args += ["--two-stems", "vocals"] }
-        args += ["-o", out.path, item.url.path]
+        var args: [String]
+        switch engine {
+        case .demucs:
+            args = ["-n", item.model.id]
+            if item.twoStems { args += ["--two-stems", "vocals"] }
+            args += ["-o", out.path, item.url.path]
+        case .audioSeparator:
+            args = [item.url.path, "-m", item.model.id, "--model_file_dir", item.model.directory.path,
+                    "--output_dir", out.path, "--output_format", "WAV"]
+        }
 
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: demucs)
+        p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
         var env = ProcessInfo.processInfo.environment
-        let demucsDir = (demucs as NSString).deletingLastPathComponent
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + demucsDir
+        let toolDir = (tool as NSString).deletingLastPathComponent
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + toolDir
         p.environment = env
         let err = Pipe()
         p.standardError = err
@@ -99,7 +107,7 @@ final class QueueManager: ObservableObject {
             let data = h.availableData
             guard !data.isEmpty, let s = String(data: data, encoding: .utf8) else { return }
             tail.append(s)
-            if let pct = Self.lastPercent(in: s) {
+            if engine == .demucs, let pct = Self.lastPercent(in: s) {
                 Task { @MainActor in item?.progress = Double(pct) / 100 }
             }
         }
@@ -107,7 +115,7 @@ final class QueueManager: ObservableObject {
         let code: Int32 = await withCheckedContinuation { cont in
             p.terminationHandler = { cont.resume(returning: $0.terminationStatus) }
             do { try p.run() } catch {
-                tail.append("Failed to launch demucs: \(error.localizedDescription)")
+                tail.append("Failed to launch \(engine.toolName): \(error.localizedDescription)")
                 cont.resume(returning: -1)
             }
         }
@@ -116,22 +124,45 @@ final class QueueManager: ObservableObject {
         if item.cancelled { return }
 
         guard code == 0 else {
-            item.status = .failed("Demucs exited with error \(code).\n" + tail.last(400))
+            item.status = .failed("\(engine.toolName) exited with error \(code).\n" + tail.last(400))
             return
         }
-        let folder = out.appendingPathComponent(item.model.id).appendingPathComponent(item.title)
-        let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
-            .filter { ["wav", "mp3", "flac"].contains($0.pathExtension.lowercased()) }
-        guard !files.isEmpty else {
+        let stems = Self.collectStems(engine: engine, model: item.model, title: item.title, in: out)
+        guard !stems.isEmpty else {
             item.status = .failed("Output files not found after separation.")
             return
         }
-        let order = ["vocals", "drums", "bass", "guitar", "piano", "other", "no_vocals"]
-        item.stems = files
-            .map { StemOutput(stem: $0.deletingPathExtension().lastPathComponent, url: $0) }
-            .sorted { (order.firstIndex(of: $0.stem) ?? 99) < (order.firstIndex(of: $1.stem) ?? 99) }
+        item.stems = stems
         item.progress = 1
         item.status = .done
+    }
+
+    /// Demucs writes <out>/<model>/<track>/<stem>.wav.
+    /// audio-separator writes <out>/<track>_(<Stem>)_<model>.wav, with the stem name in parentheses.
+    private static func collectStems(engine: Engine, model: ModelConfig, title: String, in out: URL) -> [StemOutput] {
+        let fm = FileManager.default
+        let audio = ["wav", "mp3", "flac"]
+        switch engine {
+        case .demucs:
+            let folder = out.appendingPathComponent(model.id).appendingPathComponent(title)
+            let files = ((try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+                .filter { audio.contains($0.pathExtension.lowercased()) }
+            let order = ["vocals", "drums", "bass", "guitar", "piano", "other", "no_vocals"]
+            return files
+                .map { StemOutput(stem: $0.deletingPathExtension().lastPathComponent, url: $0) }
+                .sorted { (order.firstIndex(of: $0.stem) ?? 99) < (order.firstIndex(of: $1.stem) ?? 99) }
+        case .audioSeparator:
+            let files = ((try? fm.contentsOfDirectory(at: out, includingPropertiesForKeys: nil)) ?? [])
+                .filter { audio.contains($0.pathExtension.lowercased()) }
+            let stems: [StemOutput] = files.compactMap { f in
+                let name = f.deletingPathExtension().lastPathComponent
+                guard let open = name.range(of: "_("), let close = name.range(of: ")_", range: open.upperBound..<name.endIndex)
+                else { return nil }
+                return StemOutput(stem: String(name[open.upperBound..<close.lowerBound]), url: f)
+            }
+            // Keep the extracted instrument first, the remainder second.
+            return stems.sorted { !$0.stem.hasPrefix("No ") && $1.stem.hasPrefix("No ") }
+        }
     }
 
     /// Demucs prints tqdm bars like " 45%|████ | 9.9/21.8"; take the last percentage in a chunk.

@@ -29,7 +29,6 @@ struct RootView: View {
                 SetupView(onDone: { store.setupComplete = true })
             }
         }
-        .frame(minWidth: 560, minHeight: 520)
     }
 }
 
@@ -52,8 +51,10 @@ struct ContentView: View {
                     ForEach(installedModels) { Text($0.label).tag($0.id) }
                 }
                 .fixedSize()
-                Toggle("Vocals and instrumental only", isOn: $twoStems)
-                    .toggleStyle(.checkbox)
+                if model.engine == .demucs {
+                    Toggle("Vocals and instrumental only", isOn: $twoStems)
+                        .toggleStyle(.checkbox)
+                }
                 Spacer()
                 Button { showModels = true } label: { Label("Models", systemImage: "arrow.down.circle") }
             }
@@ -72,6 +73,7 @@ struct ContentView: View {
                 }
             }
         }
+        .frame(minWidth: 560, minHeight: 520)
         .onOpenURL { add([$0]) }
         .sheet(isPresented: $showModels) {
             SetupView(isSheet: true, onDone: { showModels = false })
@@ -79,7 +81,7 @@ struct ContentView: View {
     }
 
     private func add(_ urls: [URL]) {
-        queue.add(urls, model: model, twoStems: twoStems, demucs: store.demucsPath)
+        queue.add(urls, model: model, twoStems: twoStems, tool: store.toolPath(for: model.engine))
     }
 }
 
@@ -152,7 +154,7 @@ struct QueueItemRow: View {
             }
             switch item.status {
             case .running:
-                ProgressView(value: item.progress)
+                if item.progress > 0 { ProgressView(value: item.progress) } else { ProgressView().progressViewStyle(.linear) }
             case .failed(let msg):
                 Text(msg).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             case .done:
@@ -168,7 +170,9 @@ struct QueueItemRow: View {
     private var statusText: String {
         switch item.status {
         case .waiting: return "Waiting"
-        case .running: return item.progress > 0 ? "Separating… \(Int(item.progress * 100))%" : "Starting…"
+        case .running:
+            if item.model.engine == .audioSeparator { return "Separating… this can take a minute or two" }
+            return item.progress > 0 ? "Separating… \(Int(item.progress * 100))%" : "Starting…"
         case .done: return "Done"
         case .failed: return "Failed"
         }

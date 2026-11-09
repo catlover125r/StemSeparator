@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// First-run screen (and the "Models" sheet): checks for Demucs and downloads separation models.
+/// First-run screen (and the "Models" sheet): checks for the separation tools and downloads models.
 struct SetupView: View {
     @EnvironmentObject var store: ModelStore
     var isSheet = false
@@ -13,63 +13,69 @@ struct SetupView: View {
         ModelConfig.all.filter { selected.contains($0.id) && !store.installed.contains($0.id) }
     }
     private var downloadBytes: Int64 { toDownload.reduce(0) { $0 + $1.totalBytes } }
-    private var canFinish: Bool { isSheet || (store.demucsPath != nil && !store.installed.isEmpty) }
+    private var canFinish: Bool { isSheet || ModelConfig.all.contains(where: store.usable) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Image(systemName: "waveform.path.ecg")
                     .font(.system(size: 30, weight: .light))
                     .foregroundStyle(.tint)
                 Text(isSheet ? "Models" : "Welcome to StemSeparator")
                     .font(.title.weight(.semibold))
-                Text("Songs are split by Demucs, an AI model. Pick the models to download. They are stored once on this Mac and work offline afterwards.")
+                Text("Songs are split by AI models. Pick the ones to download. They are stored once on this Mac and work offline afterwards.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            demucsRow
+            VStack(spacing: 8) {
+                toolRow(.demucs, note: "Runs the Standard, High quality and Six stems models.")
+                toolRow(.audioSeparator, note: "Optional. Runs the Woodwinds model (about 1 GB to install).")
+            }
 
             VStack(spacing: 8) {
                 ForEach(ModelConfig.all) { m in modelRow(m) }
             }
 
-            Text("Saved to ~/.cache/torch/hub/checkpoints, the same place Demucs keeps them.")
+            Text("Demucs models are saved to ~/.cache/torch/hub/checkpoints. Woodwinds is saved to ~/Library/Application Support/StemSeparator.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
             footer
         }
         .padding(28)
-        .frame(minWidth: 540, minHeight: isSheet ? 560 : 0)
+        .frame(minWidth: 560, minHeight: 700)
         .onAppear { store.refresh() }
     }
 
-    // MARK: Demucs
+    // MARK: Tools
 
-    private var demucsRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: store.demucsPath != nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(store.demucsPath != nil ? Color.green : Color.orange)
+    private func toolRow(_ engine: Engine, note: String) -> some View {
+        let path = store.toolPath(for: engine)
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: path != nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(path != nil ? Color.green : Color.orange)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 6) {
-                if let path = store.demucsPath {
-                    Text("Demucs is installed").fontWeight(.medium)
+                if let path {
+                    Text("\(engine.toolName) is installed").fontWeight(.medium)
                     Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 } else {
-                    Text("Demucs isn't installed yet").fontWeight(.medium)
+                    Text("\(engine.toolName) isn't installed yet").fontWeight(.medium)
+                    Text(note).font(.caption).foregroundStyle(.secondary)
                     Text("Run this in Terminal, then click Check Again:")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        Text("pip3 install demucs")
+                        Text(engine.installCommand)
                             .font(.system(.callout, design: .monospaced))
                             .textSelection(.enabled)
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                         Button("Copy") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("pip3 install demucs", forType: .string)
+                            NSPasteboard.general.setString(engine.installCommand, forType: .string)
                         }
                         Button("Check Again") { store.refresh() }
                     }
@@ -106,6 +112,7 @@ struct SetupView: View {
                     }
                 }
                 Text(m.detail).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let state, state.active {
                     HStack {
                         ProgressView(value: state.fraction)
