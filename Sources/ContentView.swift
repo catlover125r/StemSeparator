@@ -8,7 +8,7 @@ struct StemSeparatorApp: App {
     @StateObject private var queue = QueueManager()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Stem Separator") {
             RootView()
                 .environmentObject(store)
                 .environmentObject(queue)
@@ -32,52 +32,128 @@ struct RootView: View {
     }
 }
 
+extension ModelConfig {
+    /// The stems this model produces, for the summary line under the model name.
+    func stemNames(twoStems: Bool) -> [String] {
+        switch engine {
+        case .audioSeparator: return ["Woodwinds", "No Woodwinds"]
+        case .demucs:
+            if twoStems { return ["Vocals", "Instrumental"] }
+            return id == "htdemucs_6s"
+                ? ["Vocals", "Drums", "Bass", "Guitar", "Piano", "Other"]
+                : ["Vocals", "Drums", "Bass", "Other"]
+        }
+    }
+    /// Short technical name shown in the header, e.g. "htdemucs · Apple GPU".
+    var technicalName: String {
+        let name = id.hasSuffix(".pth") ? String(id.dropLast(4)) : id
+        let device: String = engine == .demucs ? "Apple GPU" : "CPU"
+        return name + " · " + device
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: ModelStore
     @EnvironmentObject var queue: QueueManager
-    @AppStorage("modelID") private var modelID = "htdemucs"
-    @AppStorage("twoStems") private var twoStems = true
+    @AppStorage("sep.modelID") private var modelID = "htdemucs"
+    @AppStorage("sep.twoStems") private var twoStems = true
     @State private var showModels = false
 
     private var installedModels: [ModelConfig] { ModelConfig.all.filter { store.installed.contains($0.id) } }
     private var model: ModelConfig {
         installedModels.first { $0.id == modelID } ?? installedModels.first ?? ModelConfig.all[0]
     }
+    private var tracksLabel: String {
+        if model.engine != .demucs || twoStems { return "2 Tracks" }
+        return fullTracksTitle
+    }
+    private var fullTracksTitle: String { model.id == "htdemucs_6s" ? "6 Tracks" : "4 Tracks" }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Picker("Model", selection: Binding(get: { model.id }, set: { modelID = $0 })) {
-                    ForEach(installedModels) { Text($0.label).tag($0.id) }
-                }
-                .fixedSize()
-                if model.engine == .demucs {
-                    Toggle("Vocals and instrumental only", isOn: $twoStems)
-                        .toggleStyle(.checkbox)
-                }
-                Spacer()
-                Button { showModels = true } label: { Label("Models", systemImage: "arrow.down.circle") }
-            }
-            .padding(.horizontal, 20).padding(.vertical, 12)
+            header
+            Divider()
+            controls
             Divider()
 
             if queue.items.isEmpty {
-                DropZoneView(compact: false, onAdd: add).padding(20)
+                DropZoneView(compact: false, tracksLabel: tracksLabel, onAdd: add).padding(24)
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
-                        DropZoneView(compact: true, onAdd: add)
+                        DropZoneView(compact: true, tracksLabel: tracksLabel, onAdd: add)
                         ForEach(queue.items) { item in QueueItemRow(item: item) }
                     }
                     .padding(20)
                 }
             }
         }
-        .frame(minWidth: 560, minHeight: 520)
+        .frame(minWidth: 480, minHeight: 520)
         .onOpenURL { add([$0]) }
         .sheet(isPresented: $showModels) {
             SetupView(isSheet: true, onDone: { showModels = false })
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "music.note.list")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+            Text("Stem Separator").font(.system(size: 22, weight: .semibold))
+            Spacer()
+            Button { showModels = true } label: { Label("Models", systemImage: "arrow.down.circle") }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 18)
+        .background(Color.primary.opacity(0.03))
+    }
+
+    private var controls: some View {
+        HStack(alignment: .top) {
+            if model.engine == .demucs {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tracks").font(.callout).foregroundStyle(.secondary)
+                    HStack(spacing: 0) {
+                        segment("2 Tracks", selected: twoStems) { twoStems = true }
+                        segment(fullTracksTitle, selected: !twoStems) { twoStems = false }
+                    }
+                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                Menu {
+                    ForEach(installedModels) { m in
+                        Button(m.label) { modelID = m.id }
+                    }
+                    Divider()
+                    Button("Manage Models…") { showModels = true }
+                } label: {
+                    Text(model.technicalName).font(.system(.callout, design: .monospaced))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                Text(model.stemNames(twoStems: twoStems).joined(separator: " · "))
+                    .font(.callout).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .background(Color.primary.opacity(0.03))
+    }
+
+    private func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: .medium))
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .background(selected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 
     private func add(_ urls: [URL]) {
@@ -87,29 +163,35 @@ struct ContentView: View {
 
 struct DropZoneView: View {
     let compact: Bool
+    let tracksLabel: String
     let onAdd: ([URL]) -> Void
     @State private var targeted = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "waveform.path.ecg")
-                .font(.system(size: compact ? 18 : 40, weight: .light))
-            Text(compact ? "Drop more files here" : "Drop audio files here")
-                .font(compact ? .callout : .title3)
-            if !compact {
-                Text("or click to choose").font(.callout).foregroundStyle(.secondary)
+        VStack(spacing: compact ? 6 : 10) {
+            Image(systemName: "waveform")
+                .font(.system(size: compact ? 20 : 54, weight: .ultraLight))
+            if compact {
+                Text("Drop more files here").font(.callout)
+            } else {
+                Text("Drop audio files here").font(.title3.weight(.semibold))
+                Text("MP3 · WAV · FLAC · M4A · AIFF").font(.callout)
+                Text(tracksLabel).font(.callout)
+                Button("Choose Files…") { choose() }
+                    .controlSize(.large)
+                    .padding(.top, 8)
             }
         }
         .foregroundStyle(targeted ? Color.accentColor : .secondary)
-        .frame(maxWidth: .infinity, minHeight: compact ? 64 : 0, maxHeight: compact ? 64 : .infinity)
+        .frame(maxWidth: .infinity, minHeight: compact ? 70 : 0, maxHeight: compact ? 70 : .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-                .foregroundStyle(targeted ? Color.accentColor : Color.secondary.opacity(0.4))
-                .background(targeted ? Color.accentColor.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 14))
+            RoundedRectangle(cornerRadius: 22)
+                .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [10, 8]))
+                .foregroundStyle(targeted ? Color.accentColor : Color.secondary.opacity(0.45))
+                .background(targeted ? Color.accentColor.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 22))
         )
         .contentShape(Rectangle())
-        .onTapGesture { choose() }
+        .onTapGesture { if compact { choose() } }
         .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
             Task {
                 var urls: [URL] = []

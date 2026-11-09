@@ -79,17 +79,45 @@ final class QueueManager: ObservableObject {
         let out = Self.cacheRoot.appendingPathComponent(item.id.uuidString)
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
-        var args: [String]
+        // Demucs runs on the Apple GPU (mps) first and falls back to the CPU if that fails.
+        let attempts: [[String]]
         switch engine {
         case .demucs:
-            args = ["-n", item.model.id]
-            if item.twoStems { args += ["--two-stems", "vocals"] }
-            args += ["-o", out.path, item.url.path]
+            var base = ["-n", item.model.id]
+            if item.twoStems { base += ["--two-stems", "vocals"] }
+            let tail = ["-o", out.path, item.url.path]
+            attempts = ["mps", "cpu"].map { base + ["-d", $0] + tail }
         case .audioSeparator:
-            args = [item.url.path, "-m", item.model.id, "--model_file_dir", item.model.directory.path,
-                    "--output_dir", out.path, "--output_format", "WAV"]
+            attempts = [[item.url.path, "-m", item.model.id, "--model_file_dir", item.model.directory.path,
+                         "--output_dir", out.path, "--output_format", "WAV"]]
         }
 
+        var code: Int32 = -1
+        var errorText = ""
+        for args in attempts {
+            (code, errorText) = await execute(item, tool: tool, args: args)
+            if item.cancelled { return }
+            if code == 0 { break }
+        }
+
+        guard code == 0 else {
+            item.status = .failed("\(engine.toolName) exited with error \(code).\n" + errorText)
+            return
+        }
+        let stems = Self.collectStems(engine: engine, model: item.model, title: item.title, in: out)
+        guard !stems.isEmpty else {
+            item.status = .failed("Output files not found after separation.")
+            return
+        }
+        item.stems = stems
+        item.progress = 1
+        item.status = .done
+    }
+
+    /// Runs the tool once, tracking Demucs progress. Returns the exit code and the end of stderr.
+    private func execute(_ item: QueueItem, tool: String, args: [String]) async -> (Int32, String) {
+        let engine = item.model.engine
+        item.progress = 0
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
@@ -121,20 +149,7 @@ final class QueueManager: ObservableObject {
         }
         err.fileHandleForReading.readabilityHandler = nil
         item.process = nil
-        if item.cancelled { return }
-
-        guard code == 0 else {
-            item.status = .failed("\(engine.toolName) exited with error \(code).\n" + tail.last(400))
-            return
-        }
-        let stems = Self.collectStems(engine: engine, model: item.model, title: item.title, in: out)
-        guard !stems.isEmpty else {
-            item.status = .failed("Output files not found after separation.")
-            return
-        }
-        item.stems = stems
-        item.progress = 1
-        item.status = .done
+        return (code, tail.last(400))
     }
 
     /// Demucs writes <out>/<model>/<track>/<stem>.wav.
